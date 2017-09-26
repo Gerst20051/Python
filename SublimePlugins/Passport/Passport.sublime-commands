@@ -1,0 +1,10 @@
+[
+  {
+    "caption": "Passport: Check Setting",
+    "command": "passport_check_setting"
+  },
+  {
+    "caption": "Passport: Check String",
+    "command": "passport_check_string"
+  }
+]
