@@ -37,8 +37,8 @@ class ConnectionHandler(Thread):
     Thread.__init__(self)
     self.pool = thread_pool
     self.TIMEOUT = 30
-    self.s_pointer = 0
-    self.states = ['INIT', 'HELO', 'MAIL', 'RCPT', 'DATA', 'FIN']
+    self.state_pointer = 0
+    self.states = [ 'INIT', 'HELO', 'MAIL', 'RCPT', 'DATA', 'FIN' ]
     self.client_name = ''
     self.from_mail = ''
     self.to_mails = []
@@ -46,25 +46,63 @@ class ConnectionHandler(Thread):
 
   def handle(self):
     self.send_ok('INIT')
+    while not self.current_state('FIN'):
+      self.parse_buffer(self.socket.recv(500))
     self.socket.close()
 
   def parse_buffer(self, messages):
     args = messages.split('\r\n')
-    head_msg = args[0]
-    tail_msg = args[1:-1]
-    self.parse(head_msg)
-    for m in tail_msg:
+    head_message = args[0]
+    tail_messages = args[1:-1]
+    self.parse(head_message)
+    for m in tail_messages:
       self.parse(m)
 
   def parse(self, message):
     args = message.split()
+    head = args[0].upper() if len(args) > 0 else ''
+    tail = args[1].upper() if len(args) > 1 else ''
+    input_command = ' '.join([ head, tail ]).strip() if head in [ 'MAIL', 'RCPT' ] else head
+    command_list = [ 'HELO', 'MAIL FROM:', 'RCPT TO:', 'DATA' ]
+    valid_command = False
+
+    if self.current_state('INIT') and input_command == 'HELO':
+      self.handle_helo(message)
+      valid_command = True
+
+    if not valid_command:
+      if self.current_state('HELO') and input_command == 'HELO':
+        self.send_error('duplicate_helo')
+      elif self.current_state('MAIL') and input_command == 'MAIL FROM:':
+        self.send_error('nested_mail')
+      elif input_command in command_list:
+        self.send_error('order')
+      else:
+        self.send_error('unrecognized')
+
+  def handle_helo(self, message):
+    args = message.strip().split(' ')
+    if len(args) != 2:
+      self.send_error('syntax_helo')
+    else:
+      self.client_name = args[1] if len(args) > 1 else ''
+      self.send_ok('HELO')
+
+  def current_state(self, state):
+    if self.states[self.state_pointer] == state:
+      return True
+    return False
 
   def send_ok(self, state):
     if state in self.states:
-      self.s_pointer = self.states.index(state)
+      self.state_pointer = self.states.index(state)
       message = OK[state]
+      if state == 'INIT':
+        message = message.format(name)
+      elif state == 'HELO':
+        message = message.format('{} greets {}'.format(name, self.client_name))
     else:
-      self.s_pointer = len(self.states) - 1
+      self.state_pointer = len(self.states) - 1
       message = 'State not recognized'
     self.socket.send(message)
     self.socket.settimeout(self.TIMEOUT)
@@ -87,15 +125,15 @@ class ThreadPool:
     self.pool_lock = Lock()
     self.connection_available = Condition(self.pool_lock)
     self.request_available = Condition(self.pool_lock)
-    self.conn_pool = []
+    self.connection_pool = []
     self.number_connections = 0
-    self.max_conn = number_threads
+    self.max_connections = number_threads
 
   def connection_ready(self, socket):
     with self.pool_lock:
-      while self.number_connections >= self.max_conn:
+      while self.number_connections >= self.max_connections:
         self.connection_available.wait()
-      self.conn_pool.append(socket)
+      self.connection_pool.append(socket)
       self.number_connections += 1
       self.request_available.notifyAll()
 
@@ -103,12 +141,12 @@ class ThreadPool:
     with self.pool_lock:
       while self.number_connections == 0:
         self.request_available.wait()
-      socket = self.conn_pool.pop()
+      socket = self.connection_pool.pop()
       self.number_connections -= 1
       self.connection_available.notifyAll()
       return socket
 
-def serverloop():
+def server_loop():
   pool = ThreadPool(32)
   server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
   server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -126,7 +164,7 @@ print('Server coming up on %s:%i' % (host, port))
 
 if __name__ == '__main__':
   try:
-    serverloop()
+    server_loop()
   except KeyboardInterrupt:
     print 'Interrupted'
     try:
