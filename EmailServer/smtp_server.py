@@ -1,15 +1,26 @@
 #!/usr/bin/python
 
 import os
+import re
 import socket
 import sys
-from threading import Thread, Lock, Condition
+from threading import Condition, Lock, Thread
 
-name = 'HnSWave'
+name = 'hnswave.co'
 host = '0.0.0.0'
 port = 25
 
-ERROR = {
+OK_STATES = {
+  'INIT': '220 {} Simple Mail Transfer Service Ready',
+  'HELO': '250 {} greets {}',
+  'MAIL': '250 OK',
+  'RCPT': '250 OK',
+  'DATA': '354 Start mail input; end with <CRLF>.<CRLF>',
+  'FIN': '250 OK',
+  'QUIT': '221 {} Service closing transmission channel'
+}
+
+ERROR_TYPES = {
   'unrecognized': '500 Error: command not recognized',
   'syntax_helo': '501 Syntax: HELO yourhostname',
   'syntax_from': '501 Syntax: MAIL FROM: you@domain.com',
@@ -23,22 +34,14 @@ ERROR = {
   'timeout': '421 4.4.2 {} Error: timeout exceeded'
 }
 
-OK = {
-  'INIT': '220 {} SMTP',
-  'HELO': '250 {}',
-  'MAIL': '250 OK',
-  'RCPT': '250 OK',
-  'DATA': '354 End data with <CR><LF>.<CR><LF>',
-  'FIN': '250 OK: Delivered {} messages'
-}
-
 class ConnectionHandler(Thread):
   def __init__(self, thread_pool):
     Thread.__init__(self)
     self.pool = thread_pool
     self.TIMEOUT = 30
     self.state_pointer = 0
-    self.states = [ 'INIT', 'HELO', 'MAIL', 'RCPT', 'DATA', 'FIN' ]
+    self.states = [ 'INIT', 'HELO', 'MAIL', 'RCPT', 'DATA', 'FIN', 'QUIT' ]
+    self.command_list = [ 'HELO', 'MAIL FROM:', 'RCPT TO:', 'DATA' ]
     self.client_name = ''
     self.from_mail = ''
     self.to_mails = []
@@ -46,7 +49,7 @@ class ConnectionHandler(Thread):
 
   def handle(self):
     self.send_ok('INIT')
-    while not self.current_state('FIN'):
+    while not self.current_state('QUIT'):
       self.parse_buffer(self.socket.recv(500))
     self.socket.close()
 
@@ -59,26 +62,64 @@ class ConnectionHandler(Thread):
       self.parse(m)
 
   def parse(self, message):
+    print message
     args = message.split()
     head = args[0].upper() if len(args) > 0 else ''
     tail = args[1].upper() if len(args) > 1 else ''
     input_command = ' '.join([ head, tail ]).strip() if head in [ 'MAIL', 'RCPT' ] else head
-    command_list = [ 'HELO', 'MAIL FROM:', 'RCPT TO:', 'DATA' ]
-    valid_command = False
+    print input_command
+
+    if input_command == 'QUIT':
+      self.send_ok('QUIT')
+      return
+
+    if input_command == 'NOOP':
+      self.send_reponse('250 OK')
+      return
+
+    if input_command == 'RSET':
+      self.reset_state()
+      self.send_reponse('250 OK')
+      return
 
     if self.current_state('INIT') and input_command == 'HELO':
       self.handle_helo(message)
-      valid_command = True
+      return
 
-    if not valid_command:
-      if self.current_state('HELO') and input_command == 'HELO':
-        self.send_error('duplicate_helo')
-      elif self.current_state('MAIL') and input_command == 'MAIL FROM:':
-        self.send_error('nested_mail')
-      elif input_command in command_list:
-        self.send_error('order')
-      else:
-        self.send_error('unrecognized')
+    if self.current_state('HELO') and input_command == 'MAIL FROM:':
+      self.handle_mail(message)
+      return
+
+    if (self.current_state('MAIL') or self.current_state('RCPT')) and input_command == 'RCPT TO:':
+      self.handle_rcpt(message)
+      return
+
+    if self.current_state('RCPT') and input_command == 'DATA':
+      self.handle_data(message)
+      return
+
+    if self.current_state('DATA') and message != '.':
+      self.text_body += '{}\n'.format(message)
+      return
+
+    if self.current_state('DATA') and message == '.':
+      self.send_ok('FIN')
+      print self.text_body
+      # TODO: save text_body
+      self.reset_state()
+      return
+
+    self.handle_invalid_command(input_command)
+
+  def handle_invalid_command(self, input_command):
+    if self.current_state('HELO') and input_command == 'HELO':
+      self.send_error('duplicate_helo')
+    elif self.current_state('MAIL') and input_command == 'MAIL FROM:':
+      self.send_error('nested_mail')
+    elif input_command in self.command_list:
+      self.send_error('order')
+    else:
+      self.send_error('unrecognized')
 
   def handle_helo(self, message):
     args = message.strip().split(' ')
@@ -88,28 +129,82 @@ class ConnectionHandler(Thread):
       self.client_name = args[1] if len(args) > 1 else ''
       self.send_ok('HELO')
 
+  def handle_mail(self, message):
+    args = message.strip().split(' ')
+    if len(args) == 3 and args[0].upper() == 'MAIL' and args[1].upper() == 'FROM:':
+      if self.valid_mail(args[2]):
+        self.from_mail = args[2]
+        self.send_ok('MAIL')
+      else:
+        self.from_mail = ''.join(args[2:])
+        self.send_error('sender')
+    else:
+      self.send_error('syntax_from')
+
+  def handle_rcpt(self, message):
+    args = message.strip().split(' ')
+    if len(args) == 3 and args[0].upper() == 'RCPT' and args[1].upper() == 'TO:':
+      if self.valid_mail(args[2]):
+        self.to_mails.append(args[2])
+        self.send_ok('RCPT')
+      else:
+        self.to_mails.append(''.join(args[2:]))
+        self.send_error('recipient')
+    else:
+      self.send_error('syntax_to')
+
+  def handle_data(self, message):
+    if len(message) != 4:
+      self.send_error('syntax_data')
+    else:
+      self.send_ok('DATA')
+
   def current_state(self, state):
-    if self.states[self.state_pointer] == state:
-      return True
-    return False
+    return self.states[self.state_pointer] == state
+
+  def reset_state(self):
+    self.state_pointer = self.states.index('HELO')
+    self.from_mail = ''
+    self.to_mails = []
+    self.text_body = ''
 
   def send_ok(self, state):
     if state in self.states:
       self.state_pointer = self.states.index(state)
-      message = OK[state]
-      if state == 'INIT':
+      message = OK_STATES[state]
+      if state == 'INIT' or state == 'QUIT':
         message = message.format(name)
       elif state == 'HELO':
-        message = message.format('{} greets {}'.format(name, self.client_name))
+        message = message.format(name, self.client_name)
     else:
       self.state_pointer = len(self.states) - 1
       message = 'State not recognized'
-    self.socket.send(message)
+    self.socket.send(message + '\n')
     self.socket.settimeout(self.TIMEOUT)
 
-  def send_error(self, state):
-    message = ERROR[state]
-    self.socket.send(message)
+  def send_error(self, error_type):
+    REQUIRE_ARGS = [ 'order', 'sender', 'recipient', 'timeout' ]
+    if error_type not in ERROR_TYPES:
+      message = 'Error type not recognized'
+    else:
+      if error_type not in REQUIRE_ARGS:
+        message = ERROR_TYPES[error_type]
+      elif error_type == REQUIRE_ARGS[0]:
+        message = ERROR_TYPES[error_type].format(self.states[self.state_pointer + 1])
+      elif error_type == REQUIRE_ARGS[1]:
+        message = ERROR_TYPES[error_type].format(self.from_mail)
+      elif error_type == REQUIRE_ARGS[2]:
+        message = ERROR_TYPES[error_type].format(self.to_mails.pop())
+      elif error_type == REQUIRE_ARGS[3]:
+        message = ERROR_TYPES[error_type].format(name)
+    self.socket.send(message + '\n')
+
+  def send_reponse(self, message):
+    self.socket.send(message + '\n')
+    self.socket.settimeout(self.TIMEOUT)
+
+  def valid_mail(self, email):
+    return not not re.match('[^@]+@[^@]+\.[^@]+', email)
 
   def run(self):
     while True:

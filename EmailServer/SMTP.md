@@ -1,6 +1,8 @@
 Simple Mail Transfer Protocol
 
-https://tools.ietf.org/html/rfc2821
+August 1982: https://tools.ietf.org/html/rfc821
+April 2001: https://tools.ietf.org/html/rfc2821
+October 2008: https://tools.ietf.org/html/rfc5321
 
 4. The SMTP Specifications
 4.1 SMTP Commands
