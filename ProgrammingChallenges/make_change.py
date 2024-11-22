@@ -1,6 +1,6 @@
 # [$]> python3 make_change.py
 
-def make_change(change_amount):
+def make_change_v1(change_amount):
   QUARTER = 25
   DIME = 10
   NICKEL = 5
@@ -31,11 +31,11 @@ def make_change(change_amount):
 
 print('\nVersion 1')
 
-print(make_change(26) == [1, 0, 0, 1])
-print(make_change(26))
+print(make_change_v1(26) == [1, 0, 0, 1])
+print(make_change_v1(26))
 
-print(make_change(45) == [0, 0, 2, 1])
-print(make_change(45))
+print(make_change_v1(45) == [0, 0, 2, 1])
+print(make_change_v1(45))
 
 def make_change_v2(change_amount):
   coins = [25, 10, 5, 1]
