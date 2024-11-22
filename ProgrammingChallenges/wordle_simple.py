@@ -1,3 +1,5 @@
+# [$]> python3 wordle_simple.py
+
 import random
 
 GREEN = 'green'

@@ -1,3 +1,5 @@
+# [$]> python3 worker_availability.py
+
 availability = {
   'worker_1': [(9, 11), (13, 15)],
   'worker_2': [(10, 12), (14, 16)],

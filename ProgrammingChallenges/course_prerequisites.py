@@ -1,3 +1,5 @@
+# [$]> python3 course_prerequisites.py
+
 def canFinish(prerequisites):
   current_course = prerequisites[0]
   prerequisite_courses = []

@@ -1,3 +1,5 @@
+# [$]> python3 three_sum_zero.py
+
 def threeSumZero(arr):
   if len(arr) < 3:
     print("None")

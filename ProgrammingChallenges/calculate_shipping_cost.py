@@ -1,3 +1,5 @@
+# [$]> python3 calculate_shipping_cost.py
+
 def calculate_shipping_cost(order, cost_matrix):
   order_cost = 0
   order_country = order['country']
