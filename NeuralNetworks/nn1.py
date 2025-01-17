@@ -17,7 +17,7 @@ class NeuralNetwork():
   def sigmoid_derivative(self, x): # the derivative of the sigmoid function used to calculate the necessary weight adjustments
     return x * (1 - x)
 
-  def train(self, inputs, outputs, iterations): # train the model through trail and error, adjusting the weights each time to get a better result
+  def train(self, inputs, outputs, iterations): # train the model through trial and error, adjusting the weights each time to get a better result
     for iteration in range(iterations):
       output = self.think(inputs) # pass training set through the neural network
       error = outputs - output # calculate the error rate
